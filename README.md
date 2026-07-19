@@ -1,134 +1,93 @@
 # App visualize network connect
 
-## Framework/Library support for project:
-- libpcap: support windows,mac,linux
-- GUI expected: using gtk/opengl/sdl2
+Network visualization project written in C. The current repository contains the
+first packet-capture pieces and documentation for the planned GUI/API backend
+integration.
+
+## Current implementation
+
+Verified from the files tracked in this repository:
+
+- Language: C
+- Packet capture dependency: libpcap/Npcap headers through `pcap/pcap.h`
+- Implemented capture helper: `list_interface()` in `src/capture/pcap_device.c`
+- Public capture include: `include/capture.h`
+- Placeholder packet include: `include/packet.h`
+- No build system is currently present in the repository
+- No GUI, API backend, UDP publisher, packet decoder, or storage module is
+  currently implemented
+
+`list_interface()` calls `pcap_findalldevs()`, prints each discovered interface
+name, and releases the device list with `pcap_freealldevs()`.
 
 ## Project structure
-This section describes the main layout of the project and how the core pieces fit together.
 
-### Technology stack
-- Language: C
-- Packet capture: libpcap / Npcap
-- GUI: GTK4
-- Visualization: SDL3
-- GeoIP: MaxMind GeoLite2
-- Storage: SQLite
-
-### Project tree
 ```text
 visualize_connect/
-├── CMakeLists.txt
 ├── README.md
-├── LICENSE
-├── include/
-│   ├── packet.h
-│   ├── capture.h
-│   ├── session.h
-│   ├── stats.h
-│   ├── geoip.h
-│   ├── protocol.h
-│   ├── database.h
-│   ├── config.h
-│   └── app.h
-├── src/
-│   ├── main.c
-│   ├── capture/
-│   │   ├── capture.c
-│   │   ├── pcap_device.c
-│   │   └── packet_decoder.c
-│   ├── protocol/
-│   │   ├── ethernet.c
-│   │   ├── ipv4.c
-│   │   ├── ipv6.c
-│   │   ├── tcp.c
-│   │   ├── udp.c
-│   │   ├── icmp.c
-│   │   ├── dns.c
-│   │   ├── tls.c
-│   │   └── http.c
-│   ├── analysis/
-│   │   ├── session.c
-│   │   ├── statistics.c
-│   │   ├── bandwidth.c
-│   │   ├── alerts.c
-│   │   └── ids.c
-│   ├── geoip/
-│   │   └── geoip.c
-│   ├── storage/
-│   │   ├── sqlite.c
-│   │   ├── pcap_writer.c
-│   │   ├── pcap_reader.c
-│   │   └── export.c
-│   ├── gui/
-│   │   ├── gtk/
-│   │   │   ├── window.c
-│   │   │   ├── packet_list.c
-│   │   │   ├── filters.c
-│   │   │   ├── stats_panel.c
-│   │   │   └── settings.c
-│   │   └── sdl/
-│   │       ├── renderer.c
-│   │       ├── map.c
-│   │       ├── animation.c
-│   │       └── camera.c
-│   ├── util/
-│   │   ├── logger.c
-│   │   ├── thread.c
-│   │   ├── queue.c
-│   │   ├── config.c
-│   │   └── timer.c
-│   └── core/
-│       ├── app.c
-│       ├── event_bus.c
-│       └── worker.c
-├── assets/
-│   ├── world_map.png
-│   ├── icons/
-│   └── GeoLite2/
 ├── docs/
-│   ├── architecture.md
-│   └── roadmap.md
-└── tests/
+│   └── udp_backend_contract.md
+├── include/
+│   ├── capture.h
+│   └── packet.h
+└── src/
+    └── capture/
+        ├── README.md
+        ├── capture.c
+        └── pcap_device.c
 ```
 
-### Processing flow
+## Planned architecture
+
+The intended direction is:
+
 ```text
-Capture Thread -> Packet Queue -> Packet Decoder -> Analysis Engine -> Event Queue
-                                      │
-                                      └── Session Manager
-                                              │
-                                              ├── Statistics
-                                              ├── GeoIP
-                                              ├── Alerts
-                                              ├── IDS
-                                              └── Storage
+C capture process
+  |
+  | libpcap/Npcap
+  v
+Packet/event normalization
+  |
+  | UDP socket datagrams
+  v
+API backend
+  |
+  | REST/WebSocket/SSE API
+  v
+GUI client
 ```
 
-### UI flow
-```text
-GTK4 UI          SDL3 Renderer
-   │                  │
-   └────── Event Queue ──────┘
-```
+Responsibilities:
 
-### Initial development goal
-```text
-Thread 1: Packet Capture
-Thread 2: Packet Analysis
-Thread 3: GTK UI
-Thread 4: SDL Renderer
-```
+- C capture process: enumerate interfaces, capture packets, decode enough
+  metadata for visualization, and publish compact events over UDP.
+- UDP socket boundary: provide a simple local transport from the C process to
+  the backend without coupling the GUI directly to packet capture.
+- API backend: receive UDP events, validate and aggregate them, store state if
+  needed, and expose GUI-facing APIs.
+- GUI: connect only to the API backend. The GUI should not read from libpcap or
+  the UDP capture socket directly.
 
-### Early milestone
-- Phase 1: Start with a small and simple flow
-- Main files: main.c, capture.c, packet_decoder.c, statistics.c, GTK packet list
+See `docs/udp_backend_contract.md` for the proposed UDP payload contract.
 
-### Features
-- Enumerate interfaces
-- Choose an interface
-- Start capture
-- Decode Ethernet
-- Decode IPv4
-- Decode TCP/UDP
-- Display packet list
+## Planned development milestones
+
+1. Add a build system.
+2. Declare implemented public functions in headers.
+3. Add a small CLI entry point that calls `list_interface()`.
+4. Add packet capture start/stop functions.
+5. Decode Ethernet, IPv4, TCP, and UDP metadata.
+6. Add a UDP socket publisher in C.
+7. Add an API backend UDP receiver.
+8. Add GUI views that consume backend APIs.
+
+## Dependencies
+
+Current code requires libpcap-compatible development headers:
+
+- Linux/macOS: libpcap
+- Windows: Npcap SDK and compatible compiler configuration
+
+The planned GUI/backend stack is not implemented yet. Earlier notes mentioned
+GTK, OpenGL, SDL, SQLite, and GeoIP, but those dependencies are not currently
+used by the repository code.
