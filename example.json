@@ -1,0 +1,14 @@
+{
+  "schema": "visualize_connect.packet.v1",
+  "event": "packet",
+  "timestamp_unix_ms": 0,
+  "interface": "eth0",
+  "direction": "unknown",
+  "l3": "ipv4",
+  "l4": "udp",
+  "src_ip": "192.0.2.10",
+  "src_port": 5353,
+  "dst_ip": "198.51.100.20",
+  "dst_port": 53,
+  "bytes": 128
+}

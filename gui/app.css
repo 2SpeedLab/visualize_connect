@@ -1,0 +1,49 @@
+window {
+  background: #111827;
+  color: #e5e7eb;
+}
+
+headerbar, .toolbar {
+  background: #172033;
+  color: #f8fafc;
+}
+
+.sidebar, .detail-panel, .packet-panel, .chart-panel {
+  background: #172033;
+  border-radius: 12px;
+}
+
+.stat-card, .protocol-card {
+  background: #202c43;
+  border-radius: 10px;
+}
+
+.metric-value {
+  color: #7dd3fc;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.muted {
+  color: #94a3b8;
+}
+
+.column-header {
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+list row {
+  border-bottom: 1px solid #26344d;
+  padding: 4px;
+}
+
+list row:selected {
+  background: #1e3a5f;
+}
+
+textview text {
+  background: #0f172a;
+  color: #dbeafe;
+}

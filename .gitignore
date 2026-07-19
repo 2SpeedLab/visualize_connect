@@ -53,3 +53,12 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# Rust build output
+/target/
+# macOS / editor files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
