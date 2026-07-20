@@ -1,37 +1,149 @@
 use gtk::cairo;
 use gtk::gdk;
-use gtk::glib;
 use gtk::prelude::*;
 use gtk::{
     Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, DrawingArea, DropDown,
     Frame, HeaderBar, Label, ListBox, ListBoxRow, Orientation, Paned, PolicyType, ScrolledWindow,
     SearchEntry, Separator, StyleContext, TextBuffer, TextView,
 };
-use gtk4 as gtk;
-use std::cell::Cell;
-use std::rc::Rc;
-use std::time::Duration;
+use if_addrs::get_if_addrs;
+use serde::Deserialize;
+use std::collections::BTreeMap;
+use std::fs;
+#[cfg(unix)]
+use std::process::Command;
 
 const APP_ID: &str = "com.example.NetworkVisualizer";
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Packet {
-    time: &'static str,
-    protocol: &'static str,
-    source: &'static str,
-    destination: &'static str,
+    time: String,
+    protocol: String,
+    source: String,
+    destination: String,
     length: u16,
-    summary: &'static str,
+    summary: String,
 }
 
-const PACKETS: [Packet; 6] = [
-    Packet { time: "10:42:01.104", protocol: "UDP", source: "192.168.1.24:5353", destination: "224.0.0.251:5353", length: 186, summary: "mDNS standard query" },
-    Packet { time: "10:42:01.227", protocol: "TCP", source: "192.168.1.24:51432", destination: "142.250.196.14:443", length: 66, summary: "ACK" },
-    Packet { time: "10:42:01.390", protocol: "TCP", source: "142.250.196.14:443", destination: "192.168.1.24:51432", length: 1514, summary: "TLS application data" },
-    Packet { time: "10:42:01.642", protocol: "ARP", source: "192.168.1.1", destination: "192.168.1.24", length: 42, summary: "Who has 192.168.1.24?" },
-    Packet { time: "10:42:01.811", protocol: "ICMP", source: "192.168.1.24", destination: "1.1.1.1", length: 98, summary: "Echo request" },
-    Packet { time: "10:42:02.001", protocol: "UDP", source: "192.168.1.24:61245", destination: "8.8.8.8:53", length: 82, summary: "DNS query: api.example.com" },
-];
+#[derive(Deserialize)]
+struct PacketInput {
+    timestamp_unix_ms: u64,
+    interface: String,
+    direction: String,
+    l3: String,
+    l4: String,
+    src_ip: String,
+    src_port: u16,
+    dst_ip: String,
+    dst_port: u16,
+    bytes: u16,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum PacketDocument {
+    One(PacketInput),
+    Many(Vec<PacketInput>),
+}
+
+impl From<PacketInput> for Packet {
+    fn from(input: PacketInput) -> Self {
+        Self {
+            time: if input.timestamp_unix_ms == 0 {
+                "—".to_owned()
+            } else {
+                input.timestamp_unix_ms.to_string()
+            },
+            protocol: input.l4.to_uppercase(),
+            source: format!("{}:{}", input.src_ip, input.src_port),
+            destination: format!("{}:{}", input.dst_ip, input.dst_port),
+            length: input.bytes,
+            summary: format!(
+                "{} packet · {} · {}",
+                input.l3.to_uppercase(),
+                input.direction,
+                input.interface
+            ),
+        }
+    }
+}
+
+fn load_packets(path: &str) -> Result<Vec<Packet>, String> {
+    let json =
+        fs::read_to_string(path).map_err(|error| format!("Could not read {path}: {error}"))?;
+    let document: PacketDocument =
+        serde_json::from_str(&json).map_err(|error| format!("Invalid JSON in {path}: {error}"))?;
+
+    Ok(match document {
+        PacketDocument::One(packet) => vec![packet.into()],
+        PacketDocument::Many(packets) => packets.into_iter().map(Packet::from).collect(),
+    })
+}
+
+fn system_interfaces() -> Vec<String> {
+    let mut addresses_by_name = BTreeMap::<String, Vec<String>>::new();
+
+    // `get_if_addrs` provides addresses, but interfaces with no assigned IP can be absent.
+    // On Unix, merge it with `ifconfig -a` so disabled, tunnel, bridge, and virtual adapters
+    // are still selectable.
+    #[cfg(unix)]
+    for name in ifconfig_interface_names() {
+        addresses_by_name.entry(name).or_default();
+    }
+
+    let interfaces = match get_if_addrs() {
+        Ok(interfaces) => interfaces,
+        Err(error) => {
+            eprintln!("Could not list network interfaces: {error}");
+            return interface_options(addresses_by_name);
+        }
+    };
+
+    for interface in interfaces {
+        let address = interface.ip().to_string();
+        let addresses = addresses_by_name.entry(interface.name).or_default();
+        if !addresses.contains(&address) {
+            addresses.push(address);
+        }
+    }
+
+    interface_options(addresses_by_name)
+}
+
+fn interface_options(addresses_by_name: BTreeMap<String, Vec<String>>) -> Vec<String> {
+    let options: Vec<String> = addresses_by_name
+        .into_iter()
+        .map(|(name, mut addresses)| {
+            addresses.sort();
+            if addresses.is_empty() {
+                name
+            } else {
+                format!("{name} · {}", addresses.join(", "))
+            }
+        })
+        .collect();
+
+    if options.is_empty() {
+        vec!["No network interfaces found".to_owned()]
+    } else {
+        options
+    }
+}
+
+#[cfg(unix)]
+fn ifconfig_interface_names() -> Vec<String> {
+    let Ok(output) = Command::new("ifconfig").arg("-a").output() else {
+        return Vec::new();
+    };
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let (name, _) = line.split_once(':')?;
+            (!name.is_empty() && !name.chars().any(char::is_whitespace)).then(|| name.to_owned())
+        })
+        .collect()
+}
 
 fn set_margins(widget: &impl IsA<gtk::Widget>, amount: i32) {
     widget.set_margin_top(amount);
@@ -78,17 +190,17 @@ fn protocol_card(protocol: &str, count: &str, color: &str) -> Frame {
     card
 }
 
-fn packet_row(packet: Packet) -> ListBoxRow {
+fn packet_row(packet: &Packet) -> ListBoxRow {
     let row = ListBoxRow::new();
     let content = GtkBox::new(Orientation::Horizontal, 12);
     set_margins(&content, 6);
     let fields = [
-        (packet.time, 125),
-        (packet.protocol, 70),
-        (packet.source, 190),
-        (packet.destination, 205),
+        (&packet.time, 125),
+        (&packet.protocol, 70),
+        (&packet.source, 190),
+        (&packet.destination, 205),
         (&format!("{} B", packet.length), 80),
-        (packet.summary, 0),
+        (&packet.summary, 0),
     ];
     for (text, width) in fields {
         let value = label(text, None);
@@ -136,7 +248,11 @@ fn chart() -> DrawingArea {
         for (i, value) in points.iter().enumerate() {
             let x = (i as f64) * width / ((points.len() - 1) as f64);
             let y = height * value;
-            if i == 0 { cr.move_to(x, y); } else { cr.line_to(x, y); }
+            if i == 0 {
+                cr.move_to(x, y);
+            } else {
+                cr.line_to(x, y);
+            }
         }
         let _ = cr.stroke();
     });
@@ -144,6 +260,10 @@ fn chart() -> DrawingArea {
 }
 
 fn build_ui(app: &Application) {
+    let packets = load_packets("example.json").unwrap_or_else(|error| {
+        eprintln!("{error}");
+        Vec::new()
+    });
     let provider = CssProvider::new();
     provider.load_from_data(include_str!("../gui/app.css"));
     StyleContext::add_provider_for_display(
@@ -160,10 +280,9 @@ fn build_ui(app: &Application) {
         .build();
 
     let header = HeaderBar::new();
-    header.set_title_widget(Some(&Label::new(Some("Network Visualizer"))));
-    let capture = Button::with_label("●  Capture");
-    capture.add_css_class("suggested-action");
-    header.pack_end(&capture);
+    header.set_title_widget(Some(&Label::new(Some(
+        "Network Visualizer (Make by 2SpeedLab)",
+    ))));
     window.set_titlebar(Some(&header));
 
     let root = GtkBox::new(Orientation::Vertical, 0);
@@ -171,7 +290,9 @@ fn build_ui(app: &Application) {
     toolbar.add_css_class("toolbar");
     set_margins(&toolbar, 10);
     toolbar.append(&label("Interface", Some("muted")));
-    toolbar.append(&DropDown::from_strings(&["en0 · Wi-Fi", "lo0 · Loopback"]));
+    let interfaces = system_interfaces();
+    let interface_names: Vec<&str> = interfaces.iter().map(String::as_str).collect();
+    toolbar.append(&DropDown::from_strings(&interface_names));
     let filter = SearchEntry::new();
     filter.set_placeholder_text(Some("Filter packets: IP, port, protocol…"));
     filter.set_hexpand(true);
@@ -228,16 +349,29 @@ fn build_ui(app: &Application) {
     let packet_box = GtkBox::new(Orientation::Vertical, 0);
     let column_names = GtkBox::new(Orientation::Horizontal, 12);
     set_margins(&column_names, 10);
-    for (title, width) in [("TIME", 125), ("PROTOCOL", 70), ("SOURCE", 190), ("DESTINATION", 205), ("LENGTH", 80), ("INFO", 0)] {
+    for (title, width) in [
+        ("TIME", 125),
+        ("PROTOCOL", 70),
+        ("SOURCE", 190),
+        ("DESTINATION", 205),
+        ("LENGTH", 80),
+        ("INFO", 0),
+    ] {
         let header = label(title, Some("column-header"));
-        if width > 0 { header.set_width_request(width); } else { header.set_hexpand(true); }
+        if width > 0 {
+            header.set_width_request(width);
+        } else {
+            header.set_hexpand(true);
+        }
         column_names.append(&header);
     }
     packet_box.append(&column_names);
     packet_box.append(&Separator::new(Orientation::Horizontal));
     let packet_list = ListBox::new();
     packet_list.set_selection_mode(gtk::SelectionMode::Single);
-    for packet in PACKETS { packet_list.append(&packet_row(packet)); }
+    for packet in &packets {
+        packet_list.append(&packet_row(packet));
+    }
     let scroll = ScrolledWindow::new();
     scroll.set_policy(PolicyType::Never, PolicyType::Automatic);
     scroll.set_vexpand(true);
@@ -264,7 +398,9 @@ fn build_ui(app: &Application) {
 
     packet_list.connect_row_selected(move |_, row| {
         if let Some(row) = row {
-            if let Some(text) = row.tooltip_text() { detail_buffer.set_text(&text); }
+            if let Some(text) = row.tooltip_text() {
+                detail_buffer.set_text(&text);
+            }
         }
     });
     let filter_list = packet_list.clone();
@@ -278,20 +414,11 @@ fn build_ui(app: &Application) {
         }
     });
 
-    let tick = Rc::new(Cell::new(0usize));
-    let tick_list = packet_list.clone();
-    glib::timeout_add_local(Duration::from_millis(900), move || {
-        let index = tick.get() % PACKETS.len();
-        tick.set(tick.get() + 1);
-        tick_list.prepend(&packet_row(PACKETS[index]));
-        while tick_list.observe_children().n_items() > 250 {
-            if let Some(last) = tick_list.last_child() { tick_list.remove(&last); }
-        }
-        pps.set_text(&format!("{}", 230 + (tick.get() % 45)));
-        throughput.set_text(&format!("{:.2} MB/s", 1.65 + (tick.get() % 30) as f64 / 100.0));
-        total.set_text(&format!("{}", 2_112 + tick.get()));
-        glib::ControlFlow::Continue
-    });
+    let packet_count = packets.len();
+    total.set_text(&packet_count.to_string());
+    let total_bytes: u64 = packets.iter().map(|packet| u64::from(packet.length)).sum();
+    throughput.set_text(&format!("{total_bytes} B loaded"));
+    pps.set_text("—");
 
     layout.set_end_child(Some(&content));
     root.append(&layout);
